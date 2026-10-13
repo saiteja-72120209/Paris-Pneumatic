@@ -73,32 +73,45 @@ const STAGE_INTERVAL_MS = 3500;
 
 export default function MechanismSection() {
   const [activeStage, setActiveStage] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isCompleted, setIsCompleted] = useState(false);
+  const [playbackState, setPlaybackState] = useState('idle');
   const timerRef = useRef(null);
+  const deadlineRef = useRef(null);
+  const remainingRef = useRef(STAGE_INTERVAL_MS);
+  const activeStageRef = useRef(0);
+  const playbackStateRef = useRef('idle');
 
-  // Sequential timer effect with reliable lifecycle and cleanup
+  const isPlaying = playbackState === 'playing';
+  const isPaused = playbackState === 'paused';
+  const isCompleted = playbackState === 'completed';
+
+  const updatePlaybackState = (nextState) => {
+    playbackStateRef.current = nextState;
+    setPlaybackState(nextState);
+  };
+
+  const updateActiveStage = (nextStage) => {
+    activeStageRef.current = nextStage;
+    setActiveStage(nextStage);
+  };
+
+  // One stage timer is active at a time. Remaining time is retained on pause.
   useEffect(() => {
-    // Always clear existing timer first to avoid duplicate timer loops
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+    if (playbackState !== 'playing') return undefined;
 
-    if (isPlaying) {
-      timerRef.current = setTimeout(() => {
-        setActiveStage((prevStage) => {
-          if (prevStage < mechanismStages.length - 1) {
-            return prevStage + 1;
-          } else {
-            // Stage 5 has completed its playback duration!
-            setIsPlaying(false);
-            setIsCompleted(true);
-            return prevStage;
-          }
-        });
-      }, STAGE_INTERVAL_MS);
-    }
+    const delay = remainingRef.current;
+    deadlineRef.current = Date.now() + delay;
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      deadlineRef.current = null;
+      remainingRef.current = STAGE_INTERVAL_MS;
+
+      const currentStage = activeStageRef.current;
+      if (currentStage < mechanismStages.length - 1) {
+        updateActiveStage(currentStage + 1);
+      } else {
+        updatePlaybackState('completed');
+      }
+    }, delay);
 
     return () => {
       if (timerRef.current) {
@@ -106,25 +119,32 @@ export default function MechanismSection() {
         timerRef.current = null;
       }
     };
-  }, [isPlaying, activeStage]);
+  }, [playbackState, activeStage]);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
 
   // Handle Play / Pause / Resume / Replay
   const handleTogglePlay = () => {
-    if (isPlaying) {
-      // Pause current playback
-      setIsPlaying(false);
-    } else {
-      // If sequence is at the end or finished, restart from stage 1
-      if (isCompleted || activeStage === mechanismStages.length - 1) {
-        setActiveStage(0);
-        setIsCompleted(false);
-        setIsPlaying(true);
-      } else {
-        // Resume from current stage
-        setIsCompleted(false);
-        setIsPlaying(true);
+    if (playbackStateRef.current === 'playing') {
+      if (deadlineRef.current !== null) {
+        remainingRef.current = Math.max(0, deadlineRef.current - Date.now());
       }
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      deadlineRef.current = null;
+      updatePlaybackState('paused');
+      return;
     }
+
+    if (playbackStateRef.current === 'completed') {
+      updateActiveStage(0);
+      remainingRef.current = STAGE_INTERVAL_MS;
+    } else if (playbackStateRef.current !== 'paused') {
+      remainingRef.current = STAGE_INTERVAL_MS;
+    }
+    updatePlaybackState('playing');
   };
 
   // Handle Manual Stage Selection
@@ -133,9 +153,10 @@ export default function MechanismSection() {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    setIsPlaying(false);
-    setIsCompleted(false);
-    setActiveStage(index);
+    deadlineRef.current = null;
+    remainingRef.current = STAGE_INTERVAL_MS;
+    updatePlaybackState('idle');
+    updateActiveStage(index);
   };
 
   // Handle Reset to Stage 1
@@ -144,9 +165,10 @@ export default function MechanismSection() {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    setIsPlaying(false);
-    setIsCompleted(false);
-    setActiveStage(0);
+    deadlineRef.current = null;
+    remainingRef.current = STAGE_INTERVAL_MS;
+    updatePlaybackState('idle');
+    updateActiveStage(0);
   };
 
   const current = mechanismStages[activeStage];
@@ -291,22 +313,22 @@ export default function MechanismSection() {
               <button
                 className={`play-pause-btn ${isPlaying ? 'playing' : ''}`}
                 onClick={handleTogglePlay}
-                aria-label={isPlaying ? 'Pause Auto Play sequence' : 'Start Auto Play sequence'}
+                aria-label={isPlaying ? 'Pause Auto Play sequence' : isPaused ? 'Resume Auto Play sequence' : isCompleted ? 'Replay completed sequence' : 'Start Auto Play sequence'}
               >
                 {isPlaying ? (
                   <>
                     <Pause size={14} />
                     <span>Pause</span>
                   </>
+                ) : isPaused ? (
+                  <>
+                    <RotateCcw size={14} />
+                    <span>Resume</span>
+                  </>
                 ) : isCompleted ? (
                   <>
                     <RotateCcw size={14} />
                     <span>Replay Dispatch</span>
-                  </>
-                ) : activeStage > 0 ? (
-                  <>
-                    <Play size={14} />
-                    <span>Resume Auto Play</span>
                   </>
                 ) : (
                   <>
@@ -336,15 +358,15 @@ export default function MechanismSection() {
             ) : isCompleted ? (
               <span className="status-pill completed">
                 <CheckCircle2 size={12} />
-                <span>CYCLE COMPLETED</span>
+                <span>SEQUENCE COMPLETE</span>
               </span>
-            ) : activeStage > 0 ? (
+            ) : isPaused ? (
               <span className="status-pill paused">
                 <span>❚❚ PAUSED AT STAGE {activeStage + 1}</span>
               </span>
             ) : (
               <span className="status-pill ready">
-                <span>READY · STAGE 1 OF 5</span>
+                <span>{activeStage === 0 ? 'READY · STAGE 1 OF 5' : `READY · STAGE ${activeStage + 1} OF 5`}</span>
               </span>
             )}
           </div>
